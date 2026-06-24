@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<XMLDB PATH="local/coursereminders/db" VERSION="20260610" COMMENT="Course reminders plugin database schema."
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:noNamespaceSchemaLocation="../../../lib/xmldb/xmldb.xsd"
+>
+  <TABLES>
+    <TABLE NAME="local_coursereminders_rule" COMMENT="Reminder rules defined at course level.">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="courseid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="Course the rule belongs to."/>
+        <FIELD NAME="type" TYPE="char" LENGTH="20" NOTNULL="true" SEQUENCE="false" COMMENT="Trigger type: postenrol, inactivity or precourseend."/>
+        <FIELD NAME="delay" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Delay expressed in days."/>
+        <FIELD NAME="groupid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="Target group, only used in separate groups mode."/>
+        <FIELD NAME="enrolmethods" TYPE="char" LENGTH="255" NOTNULL="true" DEFAULT="all" SEQUENCE="false" COMMENT="CSV of enrol plugin names the rule applies to, or the sentinel all."/>
+        <FIELD NAME="alertthreshold" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Number of reminders above which the alert badge is shown."/>
+        <FIELD NAME="maxcount" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="1" SEQUENCE="false" COMMENT="Maximum number of reminders this rule may send to a user."/>
+        <FIELD NAME="sendertype" TYPE="char" LENGTH="20" NOTNULL="true" DEFAULT="noreply" SEQUENCE="false" COMMENT="Sender identity: noreply, support or teacher."/>
+        <FIELD NAME="senderid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="User id of the teacher used as sender when sendertype is teacher."/>
+        <FIELD NAME="subject" TYPE="char" LENGTH="255" NOTNULL="true" SEQUENCE="false" COMMENT="Message subject template with placeholders."/>
+        <FIELD NAME="body" TYPE="text" NOTNULL="false" SEQUENCE="false" COMMENT="Message body template with placeholders."/>
+        <FIELD NAME="bodyformat" TYPE="int" LENGTH="2" NOTNULL="true" DEFAULT="1" SEQUENCE="false" COMMENT="Body format (FORMAT_* constant)."/>
+        <FIELD NAME="enabled" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" SEQUENCE="false" COMMENT="Whether the rule is enabled."/>
+        <FIELD NAME="usermodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="courseid" TYPE="foreign" FIELDS="courseid" REFTABLE="course" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="courseid-enabled" UNIQUE="false" FIELDS="courseid, enabled"/>
+      </INDEXES>
+    </TABLE>
+    <TABLE NAME="local_coursereminders_sent" COMMENT="Log of every reminder sent.">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="ruleid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="Rule that produced the reminder. Kept even if the rule is later deleted."/>
+        <FIELD NAME="courseid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false"/>
+        <FIELD NAME="userid" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="false" COMMENT="Recipient of the reminder."/>
+        <FIELD NAME="type" TYPE="char" LENGTH="20" NOTNULL="true" SEQUENCE="false" COMMENT="Trigger type copied from the rule for history."/>
+        <FIELD NAME="occurrence" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="1" SEQUENCE="false" COMMENT="Nth send for looping (inactivity) reminders."/>
+        <FIELD NAME="timesent" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" SEQUENCE="false"/>
+        <FIELD NAME="messageid" TYPE="int" LENGTH="10" NOTNULL="false" SEQUENCE="false" COMMENT="Id returned by the Message API."/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="ruleid-userid" UNIQUE="false" FIELDS="ruleid, userid"/>
+        <INDEX NAME="courseid-userid" UNIQUE="false" FIELDS="courseid, userid"/>
+      </INDEXES>
+    </TABLE>
+  </TABLES>
+</XMLDB>
