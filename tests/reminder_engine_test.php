@@ -181,8 +181,13 @@ final class reminder_engine_test extends \advanced_testcase {
         $course = (object) ['id' => 1, 'enddate' => 0];
         $engine = new reminder_engine();
 
-        // First occurrence after the delay without any access.
-        $this->assertSame(1, $engine->evaluate($rule, $course, $this->status(['refdate' => $now - 8 * DAYSECS]), $now));
+        // A learner who never accessed since enrolment is left to the after-enrolment rule.
+        $this->assertNull($engine->evaluate($rule, $course, $this->status(['refdate' => $now - 8 * DAYSECS]), $now));
+        // First occurrence after the delay, counted from the access made at enrolment.
+        $this->assertSame(1, $engine->evaluate($rule, $course, $this->status([
+            'refdate' => $now - 8 * DAYSECS,
+            'lastaccess' => $now - 8 * DAYSECS,
+        ]), $now));
         // A recent access restarts the countdown.
         $this->assertNull($engine->evaluate($rule, $course, $this->status([
             'refdate' => $now - 20 * DAYSECS,
@@ -191,17 +196,20 @@ final class reminder_engine_test extends \advanced_testcase {
         // The next occurrence is spaced by the delay from the previous send.
         $this->assertNull($engine->evaluate($rule, $course, $this->status([
             'refdate' => $now - 20 * DAYSECS,
+            'lastaccess' => $now - 20 * DAYSECS,
             'sentcount' => 1,
             'lastsent' => $now - 3 * DAYSECS,
         ]), $now));
         $this->assertSame(2, $engine->evaluate($rule, $course, $this->status([
             'refdate' => $now - 20 * DAYSECS,
+            'lastaccess' => $now - 20 * DAYSECS,
             'sentcount' => 1,
             'lastsent' => $now - 8 * DAYSECS,
         ]), $now));
         // Capped by the per-rule maximum.
         $this->assertNull($engine->evaluate($rule, $course, $this->status([
             'refdate' => $now - 40 * DAYSECS,
+            'lastaccess' => $now - 40 * DAYSECS,
             'sentcount' => 2,
             'lastsent' => $now - 10 * DAYSECS,
         ]), $now));
@@ -209,6 +217,7 @@ final class reminder_engine_test extends \advanced_testcase {
         $endedcourse = (object) ['id' => 1, 'enddate' => $now - DAYSECS];
         $this->assertNull($engine->evaluate($rule, $endedcourse, $this->status([
             'refdate' => $now - 20 * DAYSECS,
+            'lastaccess' => $now - 20 * DAYSECS,
         ]), $now));
     }
 
@@ -248,17 +257,26 @@ final class reminder_engine_test extends \advanced_testcase {
         ]);
         $this->assertSame($now + 4 * DAYSECS, $engine->project_next_time($inactivity, $course, $this->status([
             'refdate' => $now - 20 * DAYSECS,
+            'lastaccess' => $now - 20 * DAYSECS,
+            'sentcount' => 1,
+            'lastsent' => $now - 3 * DAYSECS,
+        ]), $now));
+        // No projection for a learner who never accessed since enrolment.
+        $this->assertNull($engine->project_next_time($inactivity, $course, $this->status([
+            'refdate' => $now - 20 * DAYSECS,
             'sentcount' => 1,
             'lastsent' => $now - 3 * DAYSECS,
         ]), $now));
         $this->assertNull($engine->project_next_time($inactivity, $course, $this->status([
             'refdate' => $now - 20 * DAYSECS,
+            'lastaccess' => $now - 20 * DAYSECS,
             'sentcount' => 2,
             'lastsent' => $now - 3 * DAYSECS,
         ]), $now));
         $endingcourse = (object) ['id' => 1, 'enddate' => $now + 2 * DAYSECS];
         $this->assertNull($engine->project_next_time($inactivity, $endingcourse, $this->status([
             'refdate' => $now - 20 * DAYSECS,
+            'lastaccess' => $now - 20 * DAYSECS,
             'sentcount' => 1,
             'lastsent' => $now - 3 * DAYSECS,
         ]), $now));
@@ -316,6 +334,46 @@ final class reminder_engine_test extends \advanced_testcase {
 
         // A user the rule does not target has no status.
         $this->assertNull($engine->get_user_status($rule, $course, $outsider->id, $now));
+    }
+
+    /**
+     * Sends made before the current enrolment are ignored, so a re-enrolled learner is reminded afresh.
+     */
+    public function test_get_user_status_ignores_sends_before_reenrolment(): void {
+        global $DB;
+        $this->resetAfterTest();
+
+        $course = $this->create_completion_course();
+        $now = time();
+        // The learner's current (active) enrolment started three days ago.
+        $student = $this->create_learner($course, 'manual', $now - 3 * DAYSECS);
+
+        $rule = $this->create_rule($course->id, ['type' => rule::TYPE_INACTIVITY, 'delay' => 7, 'maxcount' => 3]);
+        // A send from a previous enrolment, before the current reference date.
+        $DB->insert_record('local_coursereminders_sent', (object) [
+            'ruleid' => $rule->get('id'),
+            'courseid' => $course->id,
+            'userid' => $student->id,
+            'type' => rule::TYPE_INACTIVITY,
+            'occurrence' => 1,
+            'timesent' => $now - 30 * DAYSECS,
+        ]);
+        // A send made during the current enrolment.
+        $DB->insert_record('local_coursereminders_sent', (object) [
+            'ruleid' => $rule->get('id'),
+            'courseid' => $course->id,
+            'userid' => $student->id,
+            'type' => rule::TYPE_INACTIVITY,
+            'occurrence' => 1,
+            'timesent' => $now - DAYSECS,
+        ]);
+
+        $engine = new reminder_engine();
+        $status = $engine->get_user_status($rule, $course, $student->id, $now);
+        $this->assertNotNull($status);
+        // Only the send within the current enrolment is counted.
+        $this->assertEquals(1, $status->sentcount);
+        $this->assertEquals($now - DAYSECS, $status->lastsent);
     }
 
     /**
@@ -462,6 +520,12 @@ final class reminder_engine_test extends \advanced_testcase {
         $now = time();
 
         $student = $this->create_learner($course, 'manual', $now - 8 * DAYSECS);
+        // The learner accessed the course at enrolment, so inactivity applies to them.
+        $DB->insert_record('user_lastaccess', (object) [
+            'userid' => $student->id,
+            'courseid' => $course->id,
+            'timeaccess' => $now - 8 * DAYSECS,
+        ]);
 
         $rule = $this->create_rule($course->id, ['type' => rule::TYPE_INACTIVITY, 'delay' => 7, 'maxcount' => 2]);
         $engine = new reminder_engine();

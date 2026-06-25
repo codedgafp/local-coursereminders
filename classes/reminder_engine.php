@@ -113,23 +113,23 @@ class reminder_engine {
             '',
             'userid, timecompleted'
         );
-        $stats = $DB->get_records_sql(
-            'SELECT userid, COUNT(id) AS sentcount, MAX(timesent) AS lastsent
-               FROM {local_coursereminders_sent}
-              WHERE ruleid = :ruleid
-           GROUP BY userid',
-            ['ruleid' => $rule->get('id')]
-        );
+        $sentrows = $DB->get_records('local_coursereminders_sent', ['ruleid' => $rule->get('id')], '', 'id, userid, timesent');
+        $senttimes = [];
+        foreach ($sentrows as $sentrow) {
+            $senttimes[$sentrow->userid][] = (int) $sentrow->timesent;
+        }
 
         $due = [];
         $refdates = [];
         foreach ($recipients as $userid => $recipient) {
+            $refdate = (int) $recipient->refdate;
+            $sends = $this->count_sends_since($senttimes[$userid] ?? [], $refdate);
             $status = (object) [
-                'refdate' => (int) $recipient->refdate,
+                'refdate' => $refdate,
                 'lastaccess' => (int) ($lastaccesses[$userid] ?? 0),
                 'completed' => isset($completions[$userid]),
-                'sentcount' => isset($stats[$userid]) ? (int) $stats[$userid]->sentcount : 0,
-                'lastsent' => isset($stats[$userid]) ? (int) $stats[$userid]->lastsent : 0,
+                'sentcount' => $sends['sentcount'],
+                'lastsent' => $sends['lastsent'],
             ];
             $occurrence = $this->evaluate($rule, $course, $status, $now);
             if ($occurrence !== null) {
@@ -147,12 +147,18 @@ class reminder_engine {
             if (!isset($users[$userid])) {
                 continue;
             }
-            // Last-resort guard against duplicates if two runs overlap.
-            $exists = $DB->record_exists('local_coursereminders_sent', [
-                'ruleid' => $rule->get('id'),
-                'userid' => $userid,
-                'occurrence' => $occurrence,
-            ]);
+            // Last-resort guard against duplicates if two runs overlap. Scoped to the
+            // current enrolment so a re-enrolled learner is not blocked by past sends.
+            $exists = $DB->record_exists_select(
+                'local_coursereminders_sent',
+                'ruleid = :ruleid AND userid = :userid AND occurrence = :occurrence AND timesent >= :refdate',
+                [
+                    'ruleid' => $rule->get('id'),
+                    'userid' => $userid,
+                    'occurrence' => $occurrence,
+                    'refdate' => $refdates[$userid],
+                ]
+            );
             if ($exists) {
                 continue;
             }
@@ -162,6 +168,28 @@ class reminder_engine {
         }
 
         return $sent;
+    }
+
+    /**
+     * Counts the reminders sent on or after a reference date and the latest of them.
+     *
+     * Sends made before the reference enrolment date belong to a previous enrolment and
+     * are ignored, so a learner who unenrolled and re-enrolled is reminded afresh.
+     *
+     * @param int[] $timestamps The send timestamps of the learner for the rule.
+     * @param int $since The reference enrolment date.
+     * @return array{sentcount: int, lastsent: int}
+     */
+    protected function count_sends_since(array $timestamps, int $since): array {
+        $sentcount = 0;
+        $lastsent = 0;
+        foreach ($timestamps as $timesent) {
+            if ($timesent >= $since) {
+                $sentcount++;
+                $lastsent = max($lastsent, $timesent);
+            }
+        }
+        return ['sentcount' => $sentcount, 'lastsent' => $lastsent];
     }
 
     /**
@@ -278,11 +306,16 @@ class reminder_engine {
                 if ($status->sentcount >= $rule->get('maxcount')) {
                     return null;
                 }
+                // A learner who has not accessed the course since enrolment is handled by
+                // the after-enrolment rule, not treated as inactive.
+                if ($status->lastaccess < $status->refdate) {
+                    return null;
+                }
                 if (!empty($course->enddate) && $now >= $course->enddate) {
                     return null;
                 }
                 // Each access, and each reminder, restarts the inactivity countdown.
-                $basis = max($status->refdate, $status->lastaccess, $status->lastsent);
+                $basis = max($status->lastaccess, $status->lastsent);
                 return ($now >= $basis + $delay) ? $status->sentcount + 1 : null;
 
             case rule::TYPE_PRECOURSEEND:
@@ -329,7 +362,12 @@ class reminder_engine {
                 if ($status->sentcount >= $rule->get('maxcount')) {
                     return null;
                 }
-                $basis = max($status->refdate, $status->lastaccess, $status->lastsent);
+                // A learner who has not accessed the course since enrolment is handled by
+                // the after-enrolment rule, not treated as inactive.
+                if ($status->lastaccess < $status->refdate) {
+                    return null;
+                }
+                $basis = max($status->lastaccess, $status->lastsent);
                 $due = max($basis + $delay, $now);
                 if (!empty($course->enddate) && $due >= $course->enddate) {
                     return null;
@@ -379,19 +417,25 @@ class reminder_engine {
             'course = :courseid AND userid = :userid AND timecompleted IS NOT NULL',
             ['courseid' => $course->id, 'userid' => $userid]
         );
-        $stats = $DB->get_record_sql(
-            'SELECT COUNT(id) AS sentcount, MAX(timesent) AS lastsent
-               FROM {local_coursereminders_sent}
-              WHERE ruleid = :ruleid AND userid = :userid',
-            ['ruleid' => $rule->get('id'), 'userid' => $userid]
+        $sentrows = $DB->get_records(
+            'local_coursereminders_sent',
+            ['ruleid' => $rule->get('id'), 'userid' => $userid],
+            '',
+            'id, timesent'
         );
+        $timestamps = [];
+        foreach ($sentrows as $sentrow) {
+            $timestamps[] = (int) $sentrow->timesent;
+        }
+        $refdate = (int) $recipients[$userid]->refdate;
+        $sends = $this->count_sends_since($timestamps, $refdate);
 
         return (object) [
-            'refdate' => (int) $recipients[$userid]->refdate,
+            'refdate' => $refdate,
             'lastaccess' => (int) $lastaccess,
             'completed' => !empty($completed),
-            'sentcount' => (int) $stats->sentcount,
-            'lastsent' => (int) $stats->lastsent,
+            'sentcount' => $sends['sentcount'],
+            'lastsent' => $sends['lastsent'],
         ];
     }
 

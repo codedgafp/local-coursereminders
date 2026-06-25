@@ -60,6 +60,12 @@ final class get_reminder_log_test extends \advanced_testcase {
             'manual',
             $now - 10 * DAYSECS
         );
+        // The learner accessed the course at enrolment, so inactivity applies to them.
+        $DB->insert_record('user_lastaccess', (object) [
+            'userid' => $student->id,
+            'courseid' => $course->id,
+            'timeaccess' => $now - 10 * DAYSECS,
+        ]);
 
         $rule = new rule(0, (object) [
             'courseid' => $course->id,
