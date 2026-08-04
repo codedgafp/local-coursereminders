@@ -62,6 +62,27 @@ if ($hassiteconfig) {
         PARAM_INT
     ));
 
+    $settings->add(new admin_setting_heading(
+        'local_coursereminders/sendingheading',
+        get_string('settings:sendingheading', 'local_coursereminders'),
+        get_string('settings:sendingheading_desc', 'local_coursereminders')
+    ));
+
+    $settings->add(new admin_setting_configcheckbox(
+        'local_coursereminders/batchsending',
+        get_string('settings:batchsending', 'local_coursereminders'),
+        get_string('settings:batchsending_desc', 'local_coursereminders'),
+        0
+    ));
+
+    $settings->add(new admin_setting_configtext(
+        'local_coursereminders/batchsize',
+        get_string('settings:batchsize', 'local_coursereminders'),
+        get_string('settings:batchsize_desc', 'local_coursereminders'),
+        \local_coursereminders\reminder_engine::DEFAULT_BATCH_SIZE,
+        PARAM_INT
+    ));
+
     $types = [
         'postenrol'    => 3 * WEEKSECS,
         'inactivity'   => 4 * WEEKSECS,

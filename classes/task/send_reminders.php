@@ -53,6 +53,7 @@ class send_reminders extends \core\task\scheduled_task {
     public function execute(): void {
         $engine = new \local_coursereminders\reminder_engine();
         $sent = $engine->run();
-        mtrace("local_coursereminders: {$sent} reminder(s) sent in total.");
+        $verb = \local_coursereminders\reminder_engine::is_batch_sending_enabled() ? 'queued' : 'sent';
+        mtrace("local_coursereminders: {$sent} reminder(s) {$verb} in total.");
     }
 }
