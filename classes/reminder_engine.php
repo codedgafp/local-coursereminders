@@ -30,6 +30,9 @@ namespace local_coursereminders;
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 class reminder_engine {
+    /** The batch size used when the batch size setting is empty or invalid. */
+    const DEFAULT_BATCH_SIZE = 200;
+
     /** The keys of the placeholders that can be used in the subject and body. */
     const PLACEHOLDERS = [
         'firstname',
@@ -43,10 +46,29 @@ class reminder_engine {
     ];
 
     /**
+     * Whether the due reminders are queued in background batches instead of sent inline.
+     *
+     * @return bool
+     */
+    public static function is_batch_sending_enabled(): bool {
+        return (bool) get_config('local_coursereminders', 'batchsending');
+    }
+
+    /**
+     * Returns the maximum number of reminders dispatched per background batch.
+     *
+     * @return int
+     */
+    public static function get_batch_size(): int {
+        $size = (int) get_config('local_coursereminders', 'batchsize');
+        return $size > 0 ? $size : self::DEFAULT_BATCH_SIZE;
+    }
+
+    /**
      * Runs every enabled rule and dispatches the due reminders.
      *
      * @param int $now The evaluation timestamp, 0 for the current time.
-     * @return int The number of reminders sent.
+     * @return int The number of reminders sent, or queued when batch sending is enabled.
      */
     public function run(int $now = 0): int {
         global $CFG, $DB;
@@ -83,7 +105,8 @@ class reminder_engine {
             }
             $sent = $this->process_rule($rule, $course, $now);
             $totalsent += $sent;
-            mtrace("Rule {$rule->get('id')} ({$rule->get('type')}) on course {$courseid}: {$sent} reminder(s) sent.");
+            $verb = self::is_batch_sending_enabled() ? 'queued' : 'sent';
+            mtrace("Rule {$rule->get('id')} ({$rule->get('type')}) on course {$courseid}: {$sent} reminder(s) {$verb}.");
         }
 
         return $totalsent;
@@ -95,7 +118,7 @@ class reminder_engine {
      * @param rule $rule The rule, expected enabled on a visible course with completion configured.
      * @param \stdClass $course The course the rule belongs to.
      * @param int $now The evaluation timestamp.
-     * @return int The number of reminders sent.
+     * @return int The number of reminders sent, or queued when batch sending is enabled.
      */
     public function process_rule(rule $rule, \stdClass $course, int $now): int {
         global $DB;
@@ -141,25 +164,17 @@ class reminder_engine {
             return 0;
         }
 
+        if (self::is_batch_sending_enabled()) {
+            return $this->queue_batches($rule, array_keys($due));
+        }
+
         $users = $DB->get_records_list('user', 'id', array_keys($due));
         $sent = 0;
         foreach ($due as $userid => $occurrence) {
             if (!isset($users[$userid])) {
                 continue;
             }
-            // Last-resort guard against duplicates if two runs overlap. Scoped to the
-            // current enrolment so a re-enrolled learner is not blocked by past sends.
-            $exists = $DB->record_exists_select(
-                'local_coursereminders_sent',
-                'ruleid = :ruleid AND userid = :userid AND occurrence = :occurrence AND timesent >= :refdate',
-                [
-                    'ruleid' => $rule->get('id'),
-                    'userid' => $userid,
-                    'occurrence' => $occurrence,
-                    'refdate' => $refdates[$userid],
-                ]
-            );
-            if ($exists) {
+            if ($this->already_sent($rule, $userid, $occurrence, $refdates[$userid])) {
                 continue;
             }
             if ($this->send_to_user($rule, $course, $users[$userid], $occurrence, $now, $refdates[$userid])) {
@@ -168,6 +183,88 @@ class reminder_engine {
         }
 
         return $sent;
+    }
+
+    /**
+     * Queues the due reminders of a rule as background batches.
+     *
+     * Each batch is an ad hoc task holding at most the configured batch size of user ids.
+     * The batch re-evaluates every user at execution time, so a reminder that is no longer
+     * due (course completed, learner unenrolled, rule disabled) is silently dropped, and a
+     * batch queued twice cannot double-send.
+     *
+     * @param rule $rule The rule the reminders originate from.
+     * @param int[] $userids The ids of the users a reminder is due for.
+     * @return int The number of reminders queued.
+     */
+    protected function queue_batches(rule $rule, array $userids): int {
+        foreach (array_chunk($userids, self::get_batch_size()) as $chunk) {
+            $task = new task\send_reminder_batch();
+            $task->set_custom_data([
+                'ruleid' => (int) $rule->get('id'),
+                'userids' => $chunk,
+            ]);
+            \core\task\manager::queue_adhoc_task($task, true);
+        }
+        return count($userids);
+    }
+
+    /**
+     * Evaluates one learner under one rule at the current time and sends the due reminder.
+     *
+     * This is the send path of the background batches: the learner's status is rebuilt from
+     * scratch so any change since the batch was queued (completion, unenrolment, an earlier
+     * send) is taken into account before anything goes out.
+     *
+     * @param rule $rule The rule, expected enabled on a visible course with completion configured.
+     * @param \stdClass $course The course the rule belongs to.
+     * @param int $userid The user id.
+     * @param int $now The evaluation and send timestamp.
+     * @return bool Whether a reminder was sent.
+     */
+    public function process_user(rule $rule, \stdClass $course, int $userid, int $now): bool {
+        $status = $this->get_user_status($rule, $course, $userid, $now);
+        if (!$status) {
+            return false;
+        }
+        $occurrence = $this->evaluate($rule, $course, $status, $now);
+        if ($occurrence === null) {
+            return false;
+        }
+        if ($this->already_sent($rule, $userid, $occurrence, $status->refdate)) {
+            return false;
+        }
+        $user = \core_user::get_user($userid);
+        if (!$user) {
+            return false;
+        }
+        return $this->send_to_user($rule, $course, $user, $occurrence, $now, $status->refdate);
+    }
+
+    /**
+     * Last-resort guard against duplicates if two runs overlap.
+     *
+     * Scoped to the current enrolment so a re-enrolled learner is not blocked by past sends.
+     *
+     * @param rule $rule The rule.
+     * @param int $userid The user id.
+     * @param int $occurrence The occurrence number about to be sent.
+     * @param int $refdate The reference enrolment date.
+     * @return bool Whether this occurrence was already sent during the current enrolment.
+     */
+    protected function already_sent(rule $rule, int $userid, int $occurrence, int $refdate): bool {
+        global $DB;
+
+        return $DB->record_exists_select(
+            'local_coursereminders_sent',
+            'ruleid = :ruleid AND userid = :userid AND occurrence = :occurrence AND timesent >= :refdate',
+            [
+                'ruleid' => $rule->get('id'),
+                'userid' => $userid,
+                'occurrence' => $occurrence,
+                'refdate' => $refdate,
+            ]
+        );
     }
 
     /**
