@@ -27,6 +27,7 @@ defined('MOODLE_INTERNAL') || die();
 
 $plugin->version = 2026062200;            // The current plugin version (Date: YYYYMMDDXX).
 $plugin->requires = 2024100700;           // Requires this Moodle version (4.5).
+$plugin->supported = [405, 502];          // Supported from Moodle 4.5 to 5.2.
 $plugin->component = 'local_coursereminders';
 $plugin->maturity = MATURITY_STABLE;
 $plugin->release = '1.0.0';
