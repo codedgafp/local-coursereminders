@@ -50,10 +50,13 @@ $PAGE->set_heading($course->fullname);
 $rule = null;
 if ($id) {
     $rule = rule::get_record(['id' => $id, 'courseid' => $course->id], MUST_EXIST);
-    $PAGE->set_title(get_string('action:edit', 'local_coursereminders'));
+    $pagetitle = get_string('action:edit', 'local_coursereminders');
 } else {
-    $PAGE->set_title(get_string('addreminder', 'local_coursereminders'));
+    $pagetitle = get_string('addreminder', 'local_coursereminders');
 }
+$PAGE->set_title($pagetitle);
+$PAGE->navbar->add(get_string('pluginname', 'local_coursereminders'), $manageurl);
+$PAGE->navbar->add($pagetitle);
 
 $separategroups = (groups_get_course_groupmode($course) == SEPARATEGROUPS);
 $groups = [];

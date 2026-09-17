@@ -47,6 +47,12 @@ $PAGE->set_pagelayout('incourse');
 $PAGE->set_title(get_string('sentlist:title', 'local_coursereminders'));
 $PAGE->set_heading($course->fullname);
 
+$manageurl = has_capability('local/coursereminders:manage', $context)
+    ? new moodle_url('/local/coursereminders/manage.php', ['courseid' => $course->id])
+    : null;
+$PAGE->navbar->add(get_string('pluginname', 'local_coursereminders'), $manageurl);
+$PAGE->navbar->add(get_string('sentlist:title', 'local_coursereminders'));
+
 if ($action === 'unenrol') {
     $userid = required_param('userid', PARAM_INT);
     $confirm = optional_param('confirm', 0, PARAM_BOOL);
