@@ -26,10 +26,12 @@
 require(__DIR__ . '/../../config.php');
 
 use local_coursereminders\output\sent_list_page;
+use local_coursereminders\sent_export;
 
 $courseid = required_param('courseid', PARAM_INT);
 $page = optional_param('page', 0, PARAM_INT);
 $action = optional_param('action', '', PARAM_ALPHA);
+$dataformat = optional_param('dataformat', '', PARAM_ALPHA);
 
 $course = get_course($courseid);
 require_login($course);
@@ -52,6 +54,18 @@ $manageurl = has_capability('local/coursereminders:manage', $context)
     : null;
 $PAGE->navbar->add(get_string('pluginname', 'local_coursereminders'), $manageurl);
 $PAGE->navbar->add(get_string('sentlist:title', 'local_coursereminders'));
+
+// The export streams the file and must run before any output is buffered.
+if ($dataformat !== '') {
+    $export = new sent_export($course);
+    \core\dataformat::download_data(
+        $export->get_filename(),
+        $dataformat,
+        $export->get_columns(),
+        $export->get_rows()
+    );
+    die;
+}
 
 if ($action === 'unenrol') {
     $userid = required_param('userid', PARAM_INT);

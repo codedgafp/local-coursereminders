@@ -24,6 +24,7 @@
     * manageurl - URL of the reminder management page.
     * haslatestsend - Whether a reminder was already sent on the course.
     * latestsend - Sentence giving the latest send date on the course.
+    * exportselector - Pre-rendered export format selector, only set when a reminder was sent.
     * hasusers - Whether at least one user is listed.
     * users - Array of user rows, each with id, fullname, profileurl, count, showbadge,
       lastsent, groupnames, messageurl, canunenrol and unenrolurl.
@@ -35,6 +36,7 @@
         "manageurl": "#",
         "haslatestsend": true,
         "latestsend": "Latest reminder sent on this course: 19/12/25, 23:50",
+        "exportselector": "",
         "hasusers": true,
         "users": [
             {
@@ -60,7 +62,10 @@
     </div>
 
     {{#haslatestsend}}
-    <p>{{latestsend}}</p>
+    <div class="d-flex flex-wrap justify-content-between align-items-center mb-3">
+        <p class="mb-0">{{latestsend}}</p>
+        {{{exportselector}}}
+    </div>
     {{/haslatestsend}}
 
     {{#hasusers}}

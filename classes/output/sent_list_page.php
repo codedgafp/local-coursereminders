@@ -16,6 +16,7 @@
 
 namespace local_coursereminders\output;
 
+use local_coursereminders\learners;
 use local_coursereminders\rule;
 use moodle_url;
 use renderer_base;
@@ -78,6 +79,12 @@ class sent_list_page implements renderable, templatable {
                 'sentlist:latestsend',
                 'local_coursereminders',
                 userdate($latestsend, $dateformat)
+            );
+            $data->exportselector = $output->download_dataformat_selector(
+                get_string('export:label', 'local_coursereminders'),
+                (new moodle_url('/local/coursereminders/sentlist.php'))->out(false),
+                'dataformat',
+                ['courseid' => $courseid]
             );
         }
 
@@ -163,33 +170,9 @@ class sent_list_page implements renderable, templatable {
      * @return array A two-element array: the user records of the page, and the total count.
      */
     protected function get_users(int $courseid, \context_course $context): array {
-        global $CFG, $DB;
+        global $DB;
 
-        $roleids = array_filter(array_map('trim', explode(',', (string) $CFG->gradebookroles)));
-        if (!$roleids) {
-            return [[], 0];
-        }
-        [$roleinsql, $params] = $DB->get_in_or_equal($roleids, SQL_PARAMS_NAMED, 'role');
-
-        $now = time();
-        $params['courseid'] = $courseid;
-        $params['enrolenabled'] = ENROL_INSTANCE_ENABLED;
-        $params['ueactive'] = ENROL_USER_ACTIVE;
-        $params['now1'] = $now;
-        $params['now2'] = $now;
-        $params['contextid'] = $context->id;
-
-        $where = "u.deleted = 0 AND u.suspended = 0
-                  AND EXISTS (SELECT 1
-                                FROM {user_enrolments} ue
-                                JOIN {enrol} e ON e.id = ue.enrolid
-                               WHERE ue.userid = u.id AND e.courseid = :courseid AND e.status = :enrolenabled
-                                     AND ue.status = :ueactive
-                                     AND (ue.timestart = 0 OR ue.timestart <= :now1)
-                                     AND (ue.timeend = 0 OR ue.timeend > :now2))
-                  AND EXISTS (SELECT 1
-                                FROM {role_assignments} ra
-                               WHERE ra.userid = u.id AND ra.contextid = :contextid AND ra.roleid {$roleinsql})";
+        [$where, $params] = learners::get_sql($courseid, $context);
 
         $totalcount = $DB->count_records_sql("SELECT COUNT(u.id) FROM {user} u WHERE {$where}", $params);
 

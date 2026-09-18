@@ -45,6 +45,9 @@ class reminder_engine {
         'courseenddate',
     ];
 
+    /** @var array Placeholder name => its token in every installed language. */
+    protected static $placeholdertokens = [];
+
     /**
      * Whether the due reminders are queued in background batches instead of sent inline.
      *
@@ -670,6 +673,81 @@ class reminder_engine {
     }
 
     /**
+     * Returns the reference enrolment date of several learners on a course.
+     *
+     * Batched equivalent of {@see self::get_reference_enrol_date()}, for the callers that need
+     * the date of a whole list of learners at once.
+     *
+     * @param \stdClass $course The course.
+     * @param array $userids The user ids.
+     * @return array userid => reference enrolment timestamp, omitting the users with no active enrolment.
+     */
+    public function get_reference_enrol_dates(\stdClass $course, array $userids): array {
+        global $DB;
+
+        if (!$userids) {
+            return [];
+        }
+        [$userinsql, $params] = $DB->get_in_or_equal($userids, SQL_PARAMS_NAMED, 'usr');
+
+        $now = time();
+        $params['courseid'] = $course->id;
+        $params['enrolenabled'] = ENROL_INSTANCE_ENABLED;
+        $params['ueactive'] = ENROL_USER_ACTIVE;
+        $params['now1'] = $now;
+        $params['now2'] = $now;
+
+        $rows = $DB->get_records_sql(
+            "SELECT ue.userid,
+                    MIN(CASE WHEN ue.timestart > 0 THEN ue.timestart ELSE ue.timecreated END) AS refdate
+               FROM {user_enrolments} ue
+               JOIN {enrol} e ON e.id = ue.enrolid AND e.courseid = :courseid AND e.status = :enrolenabled
+              WHERE ue.userid {$userinsql}
+                    AND ue.status = :ueactive
+                    AND (ue.timestart = 0 OR ue.timestart <= :now1)
+                    AND (ue.timeend = 0 OR ue.timeend > :now2)
+           GROUP BY ue.userid",
+            $params
+        );
+
+        $dates = [];
+        foreach ($rows as $row) {
+            if ($row->refdate !== null) {
+                $dates[(int) $row->userid] = (int) $row->refdate;
+            }
+        }
+        return $dates;
+    }
+
+    /**
+     * Renders a rule subject as the given learner would receive it.
+     *
+     * Used by the reminder log and its export so both show the wording the learner was sent,
+     * placeholders included.
+     *
+     * @param rule $rule The rule.
+     * @param \stdClass $course The course.
+     * @param \stdClass $user The recipient, with at least firstname and lastname.
+     * @param int|null $enroldate The recipient's reference enrolment date, or null when none.
+     * @return string
+     */
+    public function render_subject(rule $rule, \stdClass $course, \stdClass $user, ?int $enroldate): string {
+        $context = \context_course::instance($course->id);
+        $datefmt = get_string('strftimedate', 'core_langconfig');
+
+        return $this->render_placeholders((string) $rule->get('subject'), [
+            'firstname' => $user->firstname,
+            'lastname' => $user->lastname,
+            'delay' => $rule->get_delay_label(),
+            'weeks' => $rule->get_delay_weeks(),
+            'coursename' => format_string($course->fullname, true, ['context' => $context]),
+            'courseurl' => (new \moodle_url('/course/view.php', ['id' => $course->id]))->out(false),
+            'enroldate' => $enroldate ? userdate($enroldate, $datefmt) : '',
+            'courseenddate' => !empty($course->enddate) ? userdate($course->enddate, $datefmt) : '',
+        ]);
+    }
+
+    /**
      * Replaces the message placeholders with their values.
      *
      * The placeholder tokens are localised strings (for example [firstname] in English and
@@ -685,21 +763,49 @@ class reminder_engine {
             return '';
         }
 
-        $stringman = get_string_manager();
-        $langs = array_keys($stringman->get_list_of_translations(true));
-        if (!in_array('en', $langs)) {
-            $langs[] = 'en';
-        }
-
         $map = [];
-        foreach ($langs as $lang) {
-            foreach ($values as $key => $value) {
-                $token = $stringman->get_string('placeholder:' . $key, 'local_coursereminders', null, $lang);
+        foreach ($values as $key => $value) {
+            foreach (self::get_placeholder_tokens($key) as $token) {
                 $map[$token] = (string) $value;
             }
         }
 
         return strtr($text, $map);
+    }
+
+    /**
+     * Returns the token of one placeholder in every installed language.
+     *
+     * @param string $key The placeholder name.
+     * @return array The tokens, for example ['[firstname]', '[prenom]'].
+     */
+    protected static function get_placeholder_tokens(string $key): array {
+        if (!array_key_exists($key, self::$placeholdertokens)) {
+            $stringman = get_string_manager();
+            $langs = array_keys($stringman->get_list_of_translations(true));
+            if (!in_array('en', $langs)) {
+                $langs[] = 'en';
+            }
+
+            $tokens = [];
+            foreach ($langs as $lang) {
+                $tokens[] = $stringman->get_string('placeholder:' . $key, 'local_coursereminders', null, $lang);
+            }
+            self::$placeholdertokens[$key] = $tokens;
+        }
+
+        return self::$placeholdertokens[$key];
+    }
+
+    /**
+     * Clears the placeholder token cache.
+     *
+     * Only needed by tests that install or remove a language pack mid-run.
+     *
+     * @return void
+     */
+    public static function reset_caches(): void {
+        self::$placeholdertokens = [];
     }
 
     /**

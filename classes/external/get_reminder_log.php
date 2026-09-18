@@ -75,24 +75,10 @@ class get_reminder_log extends external_api {
         // Render each rule subject with the real values, as in the messages themselves.
         $engine = new reminder_engine();
         $user = \core_user::get_user($userid, '*', MUST_EXIST);
-        $coursename = format_string($course->fullname, true, ['context' => $context]);
-        $courseurl = (new \moodle_url('/course/view.php', ['id' => $course->id]))->out(false);
-        $datefmt = get_string('strftimedate', 'core_langconfig');
         $enroldate = $engine->get_reference_enrol_date($course, $userid);
-        $enroldatetext = $enroldate ? userdate($enroldate, $datefmt) : '';
-        $enddatetext = !empty($course->enddate) ? userdate($course->enddate, $datefmt) : '';
         $subjects = [];
         foreach ($rules as $ruleid => $courserule) {
-            $subjects[$ruleid] = $engine->render_placeholders((string) $courserule->get('subject'), [
-                'firstname' => $user->firstname,
-                'lastname' => $user->lastname,
-                'delay' => $courserule->get_delay_label(),
-                'weeks' => $courserule->get_delay_weeks(),
-                'coursename' => $coursename,
-                'courseurl' => $courseurl,
-                'enroldate' => $enroldatetext,
-                'courseenddate' => $enddatetext,
-            ]);
+            $subjects[$ruleid] = $engine->render_subject($courserule, $course, $user, $enroldate);
         }
 
         $sent = [];
