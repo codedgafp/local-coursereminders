@@ -17,7 +17,7 @@ Teachers create reminder rules on their own course — after enrolment, after a 
 - [Large sites](#large-sites)
 - [Capabilities](#capabilities)
 - [Privacy](#privacy)
-- [Support](#support)
+- [License](#license)
 
 ---
 
